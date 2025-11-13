@@ -14,18 +14,26 @@
 	interrupt-parent = <&intc>;
 
 	aliases {
+		ethernet0 = &dp1;
 		ethernet1 = &dp2;
 		label-mac-device = &dp2;
 		serial0 = &blsp1_uart1;
-		led-boot = &led_blue;
-		led-failsafe = &led_blue;
-		led-running = &led_blue;
-		led-upgrade = &led_white;
+		led-boot = &led_status_green;
+		led-failsafe = &led_status_red;
+		led-running = &led_status_green;
+		led-upgrade = &led_status_blue;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
-		bootargs-append = " root=/dev/ubiblock0_1";
+		// 关键修复：添加earlycon和console参数
+		bootargs-append = " root=/dev/ubiblock0_1 coherent_pool=2M console=ttyMSM0,115200n8 earlycon=msm_serial_dm,0x78af000";
+	};
+
+	// 关键修复：添加内存节点
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x0 0x10000000>; // 256MB
 	};
 
 	keys {
@@ -36,7 +44,15 @@
 		reset {
 			label = "reset";
 			linux,code = <KEY_RESTART>;
-			gpios = <&tlmm 27 GPIO_ACTIVE_LOW>;
+			gpios = <&tlmm 23 GPIO_ACTIVE_LOW>;
+			debounce-interval = <60>;
+		};
+
+		mesh {
+			label = "mesh";
+			linux,code = <KEY_WPS_BUTTON>;
+			gpios = <&tlmm 38 GPIO_ACTIVE_LOW>;
+			debounce-interval = <60>;
 		};
 	};
 
@@ -45,27 +61,37 @@
 		pinctrl-0 = <&leds_pins>;
 		pinctrl-names = "default";
 
-		led_blue: status_blue {
-			label = "blue:status";
+		led_status_red: led_status_red {
+			label = "blue:system";
 			gpio = <&tlmm 24 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
 		};
 
-		led_white: status_white {
-			label = "white:status";
-			gpio = <&tlmm 23 GPIO_ACTIVE_HIGH>;
+		led_status_green: led_status_green {
+			label = "yellow:system";
+			gpio = <&tlmm 19 GPIO_ACTIVE_HIGH>;
+		};
+
+		led_status_blue: led_status_blue {
+			label = "blue:internet";
+			gpio = <&tlmm 17 GPIO_ACTIVE_HIGH>;
 		};
 	};
 
 	reserved-memory {
-		tz_appps@4a400000 {
+		tz_apps@4a400000 {
 			no-map;
-			reg = <0x0 0x4a400000 0x0 0x400000>;
+			reg = <0x0 0x4a400000 0x0 0x700000>;
 		};
 
 		q6_mem_regions: q6_mem_regions@4b000000 {
 			no-map;
 			reg = <0x0 0x4b000000 0x0 0x3000000>;
 		};
+	};
+
+	thermal-zones {
+		status = "ok";
 	};
 };
 
@@ -77,10 +103,19 @@
 	clock-frequency = <24000000>;
 };
 
-&blsp1_uart1 {
-	pinctrl-0 = <&blsp0_uart_pins>;
-	pinctrl-names = "default";
+// 关键修复：确保GCC和TCSR启用
+&gcc {
 	status = "okay";
+};
+
+&tcsr {
+	status = "okay";
+};
+
+&blsp1_uart1 {
+	pinctrl-0 = <&blsp_uart0_pins>;
+	pinctrl-names = "default";
+	status = "ok";
 };
 
 &crypto {
@@ -93,6 +128,8 @@
 
 &dp1 {
 	status = "okay";
+	phy-handle = <&ge_phy>;
+	phy-mode = "internal";
 };
 
 &dp2 {
@@ -111,12 +148,19 @@
 
 &mdio0 {
 	status = "okay";
+
+	resets = <&gcc GCC_GEPHY_MDC_SW_ARES>;
+	reset-names = "phy";
+
+	ge_phy: ethernet-phy@7 {
+		reg = <7>;
+	};
 };
 
 &mdio1 {
 	pinctrl-0 = <&mdio1_pins>;
 	pinctrl-names = "default";
-	reset-gpios = <&tlmm 39 GPIO_ACTIVE_LOW>;
+	reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
 	status = "okay";
 
 	// QCA8337 Phy0 -> WAN
@@ -127,11 +171,11 @@
 	qca8337_1: ethernet-phy@1 {
 		reg = <1>;
 	};
-	// QCA8337 Phy3 -> LAN2
+	// QCA8337 Phy2 -> IPQ5018 GE Phy
 	qca8337_2: ethernet-phy@2 {
 		reg = <2>;
 	};
-	// QCA8337 Phy2 -> IPQ5018 GE Phy
+	// QCA8337 Phy3 -> LAN2
 	qca8337_3: ethernet-phy@3 {
 		reg = <3>;
 	};
@@ -213,10 +257,10 @@
 					"ath11k/qcn6122/hw1.0/m3_fw.mdt";
 
 	boot-args =
-			</*       type: */ 0x1 /* PCIE0 */
+			</*       type: */ 0x2 /* PCIE1 */
 		     /*     length: */ 4
-		     /*      PD id: */ 3
-		     /* reset GPIO: */ 15
+		     /*      PD id: */ 2
+		     /* reset GPIO: */ 27
 		     /*   reserved: */ 0 0>;
 
 	// IPQ5018
@@ -260,22 +304,22 @@
 	};
 
 	// QCN6102 5G
-	q6_wcss_pd3: pd-3 {
+	q6_wcss_pd2: pd-2 {
 		firmware-name = "ath11k/IPQ5018/hw1.0/q6_fw.mdt";
 		interrupts-extended =
-			<&wcss_smp2p_in 24 0>,
-			<&wcss_smp2p_in 25 0>,
-			<&wcss_smp2p_in 28 0>,
-			<&wcss_smp2p_in 27 0>;
+			<&wcss_smp2p_in 16 0>,
+			<&wcss_smp2p_in 17 0>,
+			<&wcss_smp2p_in 20 0>,
+			<&wcss_smp2p_in 19 0>;
 		interrupt-names =
 			"fatal",
 			"ready",
 			"spawn-ack",
 			"stop-ack";
 		qcom,smem-states =
-			<&wcss_smp2p_out 24>,
-			<&wcss_smp2p_out 25>,
-			<&wcss_smp2p_out 26>;
+			<&wcss_smp2p_out 16>,
+			<&wcss_smp2p_out 17>,
+			<&wcss_smp2p_out 18>;
 		qcom,smem-state-names =
 			"shutdown",
 			"stop",
@@ -287,8 +331,8 @@
 	status = "okay";
 };
 
-&qpic_nand {
-	pinctrl-0 = <&qpic_pins>;
+&nand {
+	pinctrl-0 = <&qspi_nand_pins>;
 	pinctrl-names = "default";
 	status = "okay";
 
@@ -298,7 +342,7 @@
 		#size-cells = <1>;
 		reg = <0>;
 
-		nand-ecc-engine = <&qpic_nand>;
+		nand-ecc-engine = <&nand>;
 		nand-ecc-strength = <4>;
 		nand-ecc-step-size = <512>;
 		nand-bus-width = <8>;
@@ -331,17 +375,25 @@
 };
 
 &tlmm {
-	blsp0_uart_pins: uart_pins {
-		blsp0_uart_rx_tx {
-			pins = "gpio20", "gpio21";
-			function = "blsp0_uart0";
-			bias-disable;
-		};
+	blsp_uart0_pins: blsp_uart0_pins {
+		pins =
+			"gpio28", // RX
+			"gpio29"; // TX
+		function = "blsp0_uart1";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
 	button_pins: button_pins {
-		mux {
-			pins = "gpio27";
+		button_reset {
+			pins = "gpio23";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		button_mesh {
+			pins = "gpio38";
 			function = "gpio";
 			drive-strength = <8>;
 			bias-pull-up;
@@ -349,22 +401,37 @@
 	};
 
 	leds_pins: leds_pins {
-		mux {
-			pins = "gpio23", "gpio24";
+		led_status_red {
+			pins = "gpio24";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-pull-down;
+		};
+
+		led_status_green {
+			pins = "gpio19";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-pull-down;
+		};
+
+		led_status_blue {
+			pins = "gpio17";
 			function = "gpio";
 			drive-strength = <8>;
 			bias-pull-down;
 		};
 	};
 
-	mdio1_pins: mdio-state {
-		mdc-pins {
+	mdio1_pins: mdio1_pins {
+		mdc {
 			pins = "gpio36";
 			function = "mdc";
 			drive-strength = <8>;
 			bias-pull-up;
 		};
-		mdio-pins {
+
+		mdio {
 			pins = "gpio37";
 			function = "mdio";
 			drive-strength = <8>;
@@ -372,22 +439,45 @@
 		};
 	};
 
-	qpic_pins: qpic-state {
-		clock-pins {
+	qspi_nand_pins: qspi_nand_pins {
+		clock {
 			pins = "gpio9";
 			function = "qspi_clk";
 			drive-strength = <8>;
 			bias-disable;
 		};
-		cs-pins {
+
+		cs {
 			pins = "gpio8";
 			function = "qspi_cs";
 			drive-strength = <8>;
 			bias-disable;
 		};
-		data-pins {
-			pins = "gpio4", "gpio5", "gpio6", "gpio7";
-			function = "qspi_data";
+
+		data0 {
+			pins = "gpio7";
+			function = "qspi0";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data1 {
+			pins = "gpio6";
+			function = "qspi1";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data2 {
+			pins = "gpio5";
+			function = "qspi2";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data3 {
+			pins = "gpio4";
+			function = "qspi3";
 			drive-strength = <8>;
 			bias-disable;
 		};
@@ -395,20 +485,24 @@
 };
 
 &wifi0 {
+	qcom,multipd_arch;
 	qcom,rproc = <&q6_wcss_pd1>;
 	qcom,userpd-subsys-name = "q6v5_wcss_userpd1";
 	qcom,ath11k-calibration-variant = "CMCC-RAX3000Q";
 	qcom,ath11k-fw-memory-mode = <2>;
 	qcom,bdf-addr = <0x4c400000>;
+	qcom,board_id = <0x24>;
 	status = "okay";
 };
 
 &wifi1 {
-	qcom,rproc = <&q6_wcss_pd3>;
-	qcom,userpd-subsys-name = "q6v5_wcss_userpd3";
+	qcom,multipd_arch;
+	qcom,rproc = <&q6_wcss_pd2>;
+	qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
 	qcom,ath11k-calibration-variant = "CMCC-RAX3000Q";
 	qcom,ath11k-fw-memory-mode = <2>;
 	qcom,bdf-addr = <0x4d100000>;
 	qcom,m3-dump-addr = <0x4df00000>;
+	qcom,board_id = <0x60>;
 	status = "okay";
 };
